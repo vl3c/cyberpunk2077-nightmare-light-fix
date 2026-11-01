@@ -1,0 +1,3 @@
+build/
+*.archive
+__pycache__/
