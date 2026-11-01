@@ -1,14 +1,15 @@
 // Nightmare Light Fix for Cyberpunk 2077 2.5
 //
 // Restores the red "nightmare" lighting when Johnny first appears in V's apartment (start of Act 2,
-// quest Playing for Time). Based on the nightmare part of Deceptious Bug Fixes.
+// quest Playing for Time). Companion script for the nightmare files of Deceptious Bug Fixes: an independent
+// rewrite that keeps the original's node ref names so it works with Deceptious's quest phase.
 //
 // The fix's quest phase switches 56 apartment lamps off while its red lamps are on. Those lamps live in
 // a vanilla sector and have no node refs, so this script gives them the refs
 // $/03_night_city/#nightmare_fix/#nightmare_node_01..56 when the sector loads (the red-light sector lists
 // the same refs in its nodeRefs).
 //
-// The original script found the lamps by fixed index (41 + i) and only ran for four exact pre-2.5 node
+// The original script found lamp i (1..56) at fixed setup index 41 + i and only ran for four exact pre-2.5 node
 // counts (830, 846, 827, 843). Game 2.5 has 837 (base) or 853 (Phantom Liberty), so it did nothing.
 // This version finds each lamp by its world position, checks that it is a static light, and logs
 // everything (gamelog via ModLog and FTLog), so it keeps working if the sector's size or order changes.
@@ -17,6 +18,7 @@
 
 class NightmareLightFixService extends ScriptableService {
     private let m_expected: array<Vector4>;
+    private let m_doneListener: Uint32;
 
     private cb func OnLoad() {
         this.FillExpected();
@@ -26,11 +28,19 @@ class NightmareLightFixService extends ScriptableService {
         callbacks.RegisterCallback(n"Resource/Ready", this, n"OnNightmareSectorReady")
             .AddTarget(ResourceTarget.Path(r"base\\worlds\\nightmare.streamingsector"));
         callbacks.RegisterCallback(n"Session/Ready", this, n"OnSessionReady");
+        callbacks.RegisterCallback(n"Session/BeforeEnd", this, n"OnSessionBeforeEnd");
         NightmareLightFixLog("loaded, watching sector exterior_-22_19_1_0 for " + ToString(ArraySize(this.m_expected)) + " lamps");
     }
 
     private cb func OnSessionReady(event: ref<GameSessionEvent>) {
-        GameInstance.GetQuestsSystem(GetGameInstance()).RegisterListener(n"nightmare_fix_done", this, n"OnNightmareFixDone");
+        this.m_doneListener = GameInstance.GetQuestsSystem(GetGameInstance()).RegisterListener(n"nightmare_fix_done", this, n"OnNightmareFixDone");
+    }
+
+    private cb func OnSessionBeforeEnd(event: ref<GameSessionEvent>) {
+        if this.m_doneListener != 0u {
+            GameInstance.GetQuestsSystem(GetGameInstance()).UnregisterListener(n"nightmare_fix_done", this.m_doneListener);
+            this.m_doneListener = 0u;
+        }
     }
 
     // Set by the fix's Johnny scene when the nightmare ends; the quest phase then turns the lamps back on.
@@ -39,14 +49,15 @@ class NightmareLightFixService extends ScriptableService {
     }
 
     // The red lights live in this quest-only sector. It streams in only while the fix's quest step has its
-    // prefab active, so this line in the log means the nightmare lighting started.
+    // prefab active, so this line in the log means the nightmare lighting started. Resource callbacks run on a
+    // loading job, so this handler only logs and doesn't touch game systems.
     private cb func OnNightmareSectorReady(event: ref<ResourceEvent>) {
         let sector = event.GetResource() as worldStreamingSector;
         if !IsDefined(sector) {
             NightmareLightFixLog("ERROR: red-light sector Resource/Ready fired but the resource is not a worldStreamingSector");
             return;
         }
-        NightmareLightFixLog("red-light sector loaded (" + ToString(sector.GetNodeSetupCount()) + " node setups), " + this.ClockText());
+        NightmareLightFixLog("red-light sector loaded (" + ToString(sector.GetNodeSetupCount()) + " node setups)");
     }
 
     private cb func OnSectorReady(event: ref<ResourceEvent>) {

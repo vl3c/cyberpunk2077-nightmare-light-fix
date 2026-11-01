@@ -1,7 +1,8 @@
 # Extracts files from Cyberpunk 2077 .archive (RDAR) files using the game's own Oodle DLL.
 # Read only: it never writes to the game folder.
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File extract-rdar.ps1 -Archive <path> -Out <dir> [-Paths a,b,c] [-All]
+#   powershell -ExecutionPolicy Bypass -File extract-rdar.ps1 -Archive <path> -Out <dir> [-Paths a,b,c] [-HashFile <file with hex hashes>] [-All] [-Oodle <oo2ext_7_win64.dll>]
+# Needs 64-bit PowerShell (the game's Oodle DLL is 64-bit).
 param(
   [Parameter(Mandatory=$true)][string]$Archive,
   [Parameter(Mandatory=$true)][string]$Out,
@@ -35,7 +36,7 @@ public static class Rdar {
   }
   static byte[] Seg(FileStream fs, ulong off, uint zs, uint size) {
     fs.Seek((long)off, SeekOrigin.Begin);
-    byte[] z = new byte[zs]; fs.Read(z, 0, (int)zs);
+    byte[] z = new byte[zs]; int got = 0; while (got < zs) { int r = fs.Read(z, got, (int)zs - got); if (r <= 0) throw new Exception("unexpected end of archive"); got += r; }
     if (zs == size) return z;
     if (z[0]==(byte)'K' && z[1]==(byte)'A' && z[2]==(byte)'R' && z[3]==(byte)'K') {
       uint real = BitConverter.ToUInt32(z, 4);
