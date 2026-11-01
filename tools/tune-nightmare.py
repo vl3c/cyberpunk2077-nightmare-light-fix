@@ -1,14 +1,20 @@
 # Tunes the red-light sector (pre-conversion v62 main CR2W + nodeData buffer) before convert-sector-25.py.
 # Changes, all on our own mod sector (no vanilla data touched):
-#   1. every worldStaticLightNode without a scaleVolFog property gets scaleVolFog = 0 (all vanilla 2.5
-#      apartment lamps have it 0; with the default the light also lights the fog = glowing blobs in the air)
-#   2. drops the node setups of the green/teal lights (the nightmare should be red), keeps their node
+#   1. every kept worldStaticLightNode without a scaleVolFog property gets scaleVolFog = 0 (the engine
+#      default is 100, which also lights the fog: glowing blobs in the air; the vanilla 2.5 apartment lamps
+#      use 0). Lights that already set it keep their value (all 0 in 1.4.3).
+#   2. drops the node setups of the green/teal lights (green > red; 13 in 1.4.3), keeps their node
 #      definitions unused
 #   3. scales the intensity of the very strong bathroom-door bounce lights down by BATH_SCALE
 #   4. scales the two spots right above the bed (light_035 320, light_044 150; the vanilla lamp there,
 #      light_012, is 200) down by BED_SCALE
 # Usage: python tune-nightmare.py <main.bin> <buffer1.bin> <out_main.bin> <out_buffer1.bin>
 import struct, sys, zlib
+
+def check(cond, msg):
+    # real checks, not asserts: they must also run under python -O
+    if not cond:
+        raise SystemExit('ERROR: ' + msg)
 
 BATH_SCALE = 0.25
 BED_SCALE = 0.25
@@ -34,7 +40,7 @@ class C:
             s.exp.append(dict(cls=s.names[cls], size=size, off=off))
     def props(s, i):
         x = s.exp[i]; d = s.m; p = x['off']; end = p + x['size']; out = []
-        assert d[p] == 0; p += 1
+        check(d[p] == 0, 'export %d: unexpected property block start' % i); p += 1
         while True:
             ni, ti = struct.unpack_from('<HH', d, p)
             if ni == 0: break
@@ -50,29 +56,40 @@ class C:
 def main():
     mainf, buff, outm, outb = sys.argv[1:5]
     m = bytearray(open(mainf, 'rb').read()); c = C(m)
-    assert struct.unpack_from('<I', m, 32)[0] == header_crc(m)
-    buf = open(buff, 'rb').read(); assert len(buf) % 144 == 0
+    check(struct.unpack_from('<I', m, 32)[0] == header_crc(m), 'CR2W header CRC does not match (not a valid sector main file?)')
+    buf = open(buff, 'rb').read(); check(len(buf) % 144 == 0, 'nodeData buffer size is not a multiple of 144')
     # canonical property order of lights, learned from the lights that have scaleVolFog
     order = []
     for i, x in enumerate(c.exp):
         if x['cls'] == 'worldStaticLightNode':
             for n, t, v in c.props(i)[0]:
                 if n not in order: order.append(n)
-    # node index -> export index: nodes are exports 1..N in handle order (checked: handles 2,3,... = export+1)
+    # node index -> export index: in this sector the nodes are exports 1..N in handle order (handles 2, 3, ...)
+    check('scaleVolFog' in c.names and 'Uint8' in c.names, 'name table lacks scaleVolFog/Uint8')
+    def rgb_of(raw):
+        # Color struct: 00, then Red/Green/Blue/Alpha properties (u16 name, u16 type, u32 size incl. itself, u8 value)
+        ch = {}; p = 1
+        while p + 8 <= len(raw):
+            ni, ti = struct.unpack_from('<HH', raw, p)
+            if ni == 0: break
+            sz = struct.unpack_from('<I', raw, p + 4)[0]
+            ch[c.names[ni]] = raw[p + 8]; p += 4 + sz
+        check(all(k in ch for k in ('Red', 'Green', 'Blue')), 'light color without explicit Red/Green/Blue')
+        return ch['Red'], ch['Green'], ch['Blue']
     newdata = {}
-    def light(i):
-        return {n: v for n, t, v in c.props(i)[0]}
     keep = []; dropped = []; scaled = []; fogged = []
     for r in range(len(buf) // 144):
         rec = buf[r * 144:(r + 1) * 144]
         ni = struct.unpack_from('<Q', rec, 120)[0] & 0xFFFFF
+        check(1 + ni < len(c.exp), 'record %d: node index %d out of range' % (r, ni))
         ei = 1 + ni; x = c.exp[ei]
+        check(x['cls'].startswith('world') and x['cls'].endswith('Node'), 'record %d: export %d is %s, not a node' % (r, ei, x['cls']))
         if x['cls'] != 'worldStaticLightNode':
             keep.append(rec); continue
         props, tail = c.props(ei)
         pd = {n: v for n, t, v in props}
         dn = c.names[struct.unpack_from('<H', pd['debugName'], 0)[0]]
-        col = pd['color']; rgb = (col[9], col[18], col[27])
+        rgb = rgb_of(pd['color'])
         if rgb[1] > rgb[0]:
             dropped.append('%s rgb%s' % (dn, rgb)); continue
         keep.append(rec)
@@ -89,7 +106,7 @@ def main():
         if dn in BED_LIGHTS:
             scale = BED_SCALE
         if scale is not None:
-            assert 'intensity' in pd, dn
+            check('intensity' in pd, '%s has no intensity property' % dn)
             for p in props:
                 if p[0] == 'intensity':
                     old = struct.unpack('<f', p[2])[0]; p[2] = struct.pack('<f', old * scale)
@@ -102,7 +119,7 @@ def main():
     # rebuild export data
     eo, ne, _ = c.tabs[4]
     first = c.exp[0]['off']; blob = bytearray(); offs = []
-    assert all(c.exp[i]['off'] == (c.exp[i - 1]['off'] + c.exp[i - 1]['size']) for i in range(1, ne)), 'exports not contiguous'
+    check(all(c.exp[i]['off'] == (c.exp[i - 1]['off'] + c.exp[i - 1]['size']) for i in range(1, ne)), 'exports not contiguous')
     for i, x in enumerate(c.exp):
         dat = newdata.get(i, bytes(m[x['off']:x['off'] + x['size']]))
         offs.append((first + len(blob), len(dat))); blob += dat
@@ -123,6 +140,6 @@ def main():
     for f in (24, 28): struct.pack_into('<I', m, f, struct.unpack_from('<I', m, f)[0] + delta)
     struct.pack_into('<I', m, 32, header_crc(m))
     open(outm, 'wb').write(m); open(outb, 'wb').write(newbuf)
-    print('main %d -> %d bytes, setups %d -> %d' % (old_end + 0, len(m), len(buf) // 144, len(newbuf) // 144))
+    print('export data %d -> %d bytes, setups %d -> %d' % (old_end - first, len(blob), len(buf) // 144, len(newbuf) // 144))
 
 main()

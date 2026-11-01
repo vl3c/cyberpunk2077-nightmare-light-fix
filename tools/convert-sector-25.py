@@ -17,6 +17,11 @@
 # Usage: python convert-sector-25.py <src.archive> <out.archive> <sectorHashHex> <main.bin> <buffer1.bin> [<keepHash> ...]
 import struct, sys, zlib
 
+def check(cond, msg):
+    # real checks, not asserts: they must also run under python -O
+    if not cond:
+        raise SystemExit('ERROR: ' + msg)
+
 def read_vlq(b, p):
     # CR2W packed int: first byte bit7 = flag, bit6 = continue, low 6 bits value; then 7 bits per byte
     x = b[p]; v = x & 0x3F; p += 1; sh = 6
@@ -25,6 +30,12 @@ def read_vlq(b, p):
             x = b[p]; p += 1; v |= (x & 0x7F) << sh; sh += 7
             if not x & 0x80: break
     return v, p
+
+def read_str_len(b, p):
+    # node ref strings: packed length with bit7 of the first byte set for 1-byte (ASCII/UTF-8) text;
+    # without it the text would be UTF-16, which these sectors never use
+    check(b[p] & 0x80, 'UTF-16 node ref string at offset %d is not supported' % p)
+    return read_vlq(b, p)
 
 def noderef_hash(s):
     # NodeRef hash = FNV-1a 64 of the path with every '#' skipped (matches vanilla setup globalNodeID)
@@ -44,14 +55,14 @@ def single_node_range(m, exp_off, exp_cnt, root_off, root_size, vpos):
     n, p = read_vlq(m, p); p += 4 * n
     n, p = read_vlq(m, p)
     for _ in range(n):
-        l, q = read_vlq(m, p); p = q + l
+        l, q = read_str_len(m, p); p = q + l
     cpos = p
     nv, p = read_vlq(m, p)
     vi = list(struct.unpack_from('<%dI' % nv, m, p))
     print('variantIndices before:', vi)
     if vi == [0]:
         return m, 0
-    assert nv == 2 and vi[0] == 0 and m[cpos] == 2, 'unexpected variantIndices layout'
+    check(nv == 2 and vi[0] == 0 and m[cpos] == 2, 'unexpected variantIndices layout')
     m[cpos:p + 4 * nv] = bytes([1]) + struct.pack('<I', 0)
     d = -4
     struct.pack_into('<i', m, root_off + vpos + 4, struct.unpack_from('<i', m, root_off + vpos + 4)[0] + d)
@@ -59,7 +70,7 @@ def single_node_range(m, exp_off, exp_cnt, root_off, root_size, vpos):
         e = exp_off + 24 * i
         size, off = struct.unpack_from('<II', m, e + 8)
         if i == 0:
-            assert off == root_off and size == root_size
+            check(off == root_off and size == root_size, 'first export is not the sector root')
             struct.pack_into('<I', m, e + 8, size + d)
         elif off > root_off:
             struct.pack_into('<I', m, e + 12, off + d)
@@ -83,8 +94,8 @@ def sort_noderefs(m, root_off, vpos):
     n, p = read_vlq(m, p)
     start = p; recs = []
     for _ in range(n):
-        l, q = read_vlq(m, p)
-        s = bytes(m[q:q + l]); recs.append((noderef_hash(s.split(b';')[0]), bytes(m[p:q + l]), s.decode())); p = q + l
+        l, q = read_str_len(m, p)
+        s = bytes(m[q:q + l]); recs.append((noderef_hash(s.split(b';')[0]), bytes(m[p:q + l]))); p = q + l
     srt = sorted(recs, key=lambda r: r[0])
     m[start:p] = b''.join(r[1] for r in srt)
     print('nodeRefs: %d entries, %s -> sorted by hash' % (n, 'already sorted' if srt == recs else 'reordered'))
@@ -108,18 +119,18 @@ def header_crc(m):
     return zlib.crc32(bytes(t))
 
 def convert_records(buf, node_count):
-    assert len(buf) % 144 == 0
+    check(len(buf) % 144 == 0, 'nodeData buffer size is not a multiple of 144')
     out = bytearray()
     for r in range(len(buf) // 144):
         rec = bytearray(buf[r * 144:(r + 1) * 144])
         sd, st = struct.unpack_from('<2f', rec, 112)
         old = struct.unpack_from('<Q', rec, 120)[0]
-        assert not any(rec[128:144]), 'record %d: bytes 128..143 not zero, not a pre-2.5 record' % r
+        check(not any(rec[128:144]), 'record %d: bytes 128..143 not zero, not a pre-2.5 record' % r)
         ni = old & 0xFFFFF
         flags = (old >> 20) & 0x1FFFFF
         prio = (old >> 41) & 0xFF
         todvis = (old >> 49) & 0x7FFF
-        assert ni < node_count and ni <= 0x7FFFF, 'record %d: node index %d out of range' % (r, ni)
+        check(ni < node_count and ni <= 0x7FFFF, 'record %d: node index %d out of range' % (r, ni))
         new = ni | (flags << 19) | (prio << 40) | (todvis << 48)
         struct.pack_into('<Q', rec, 112, new)
         struct.pack_into('<2f', rec, 120, sd, st)
@@ -135,17 +146,16 @@ def main():
     mainf, buf1f = sys.argv[4], sys.argv[5]
     keep = [int(h, 16) for h in sys.argv[6:]]
     m = bytearray(open(mainf, 'rb').read())
-    assert m[:4] == b'CR2W'
-    assert struct.unpack_from('<I', m, 32)[0] == header_crc(m), 'header CRC rule does not match source'
+    check(m[:4] == b'CR2W', 'not a CR2W file: ' + mainf)
+    check(struct.unpack_from('<I', m, 32)[0] == header_crc(m), 'header CRC rule does not match source')
     tabs = [list(struct.unpack_from('<III', m, 40 + 12 * i)) for i in range(10)]
     exp_off, exp_cnt, _ = tabs[4]
     boff, bcnt, bcrc = tabs[5]
-    assert zlib.crc32(bytes(m[boff:boff + 24 * bcnt])) == bcrc
+    check(zlib.crc32(bytes(m[boff:boff + 24 * bcnt])) == bcrc, 'buffer table CRC mismatch')
     bufs = [list(struct.unpack_from('<IIIIII', m, boff + 24 * i)) for i in range(bcnt)]
     print('buffers before:', bufs)
     old1 = open(buf1f, 'rb').read()
-    assert bufs[0][4] == len(old1)
-    node_count = sum(1 for _ in range(1))  # placeholder, real count below
+    check(bufs[0][4] == len(old1), 'buffer1 size does not match the main file')
     # count world*Node exports for the node index range check
     names_off, names_cnt, _ = tabs[1]
     strs_off = tabs[0][0]
@@ -164,9 +174,9 @@ def main():
     root_size, root_off = struct.unpack_from('<II', m, exp_off + 8)
     root = m[root_off:root_off + root_size]
     vpos = root.find(b'\x00\x00' + struct.pack('<i', 62))
-    assert vpos > 0, 'version 62 not found after the sector properties'
+    check(vpos > 0, 'version 62 not found after the sector properties')
     vpos += 2
-    assert struct.unpack_from('<i', root, vpos + 4)[0] == root_size - vpos - 4, 'inner size check failed'  # counts from the size field itself
+    check(struct.unpack_from('<i', root, vpos + 4)[0] == root_size - vpos - 4, 'inner size check failed')  # counts from the size field itself
     struct.pack_into('<i', m, root_off + vpos, 68)
     print('sector version 62 -> 68 at root offset', vpos)
     sort_noderefs(m, root_off, vpos)
@@ -189,10 +199,10 @@ def main():
 
     d = open(src, 'rb').read()
     magic, ver, ipos, isz = struct.unpack_from('<4sIQI', d, 0)
-    assert magic == b'RDAR' and ver == 12
+    check(magic == b'RDAR' and ver == 12, 'not an RDAR v12 archive: ' + src)
     idx = d[ipos:ipos + isz]
     _, _, crc, nf, ns, nd = struct.unpack_from('<IIQIII', idx, 0)
-    assert crc == crc64_xz(idx[16:])
+    check(crc == crc64_xz(idx[16:]), 'archive index CRC mismatch: ' + src)
     p = 28; entries = []
     for i in range(nf):
         entries.append(list(struct.unpack_from('<QQIIIII', idx, p)) + [idx[p + 36:p + 56]]); p += 56
@@ -203,6 +213,7 @@ def main():
     data = bytearray(b'\0' * 0xAC)
     newe, news, newd = [], [], []
     for h in want:
+        check(h in byhash, 'file %016x not found in %s (not the Deceptious Bug Fixes archive?)' % (h, src))
         hsh, ts, ninl, ss, se, ds, de, sha = byhash[h]
         s0 = len(news)
         for k, s in enumerate(range(ss, se)):
