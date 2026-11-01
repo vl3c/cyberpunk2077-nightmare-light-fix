@@ -32,7 +32,7 @@ The original sector also has green and teal lights, and some extremely bright bo
 
 - Cyberpunk 2077 2.5 (tested with Phantom Liberty).
 - [RED4ext](https://www.nexusmods.com/cyberpunk2077/mods/2380), [ArchiveXL](https://www.nexusmods.com/cyberpunk2077/mods/4198), [Codeware](https://www.nexusmods.com/cyberpunk2077/mods/7780), [redscript](https://www.nexusmods.com/cyberpunk2077/mods/1511). [Cyber Engine Tweaks](https://www.nexusmods.com/cyberpunk2077/mods/107) is optional (the script also logs to its game log).
-- To build: 64-bit Windows PowerShell, Python 3, and the Deceptious Bug Fixes 1.4.3 archive (`#DeceptiousBugFixes.archive`). The game's own Oodle DLL is used to read it. Other versions are refused unless you pass `-Force`, because the tuning rules were written for these exact files.
+- To build: 64-bit Windows PowerShell, Python 3, and the Deceptious Bug Fixes 1.4.3 archive (`#DeceptiousBugFixes.archive`). The game's own Oodle DLL is used to read it. If the red-light sector differs from the 1.4.3 one, the build stops unless you pass `-Force`, because the tuning rules were written for that exact file.
 
 Don't run it together with the full Deceptious Bug Fixes, which contains the same nightmare files.
 
@@ -44,7 +44,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -DbfArchive "<path>\#Deceptio
 
 - Keep the quotes around the archive path: unquoted, an argument starting with `#` is a PowerShell comment.
 - `-Game` defaults to the Epic Games folder (`C:\Program Files\Epic Games\Cyberpunk2077`). Steam and GOG users pass their game folder.
-- Python is found through the `py` launcher, or `python` if there is no launcher. Use `-Python` to pick another one.
+- Python is found through the `py` launcher, or `python` if there is no launcher. Use `-Python` with an executable name or full path to pick another one.
+- Don't end a quoted path with a backslash (`"...\Cyberpunk2077\"`): Windows PowerShell reads `\"` as an escaped quote and mixes up the arguments after it.
 
 Then copy `build\NightmareLightFix\archive` and `build\NightmareLightFix\r6` into the game folder.
 

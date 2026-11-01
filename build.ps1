@@ -5,7 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File build.ps1 -DbfArchive "<path>\#DeceptiousBugFixes.archive"
 # Options:
 #   -Game "<Cyberpunk 2077 folder>"  for the game's Oodle DLL (default: the Epic Games path; Steam/GOG users pass theirs)
-#   -Python "<command>"              Python 3 to use (default: the py launcher if installed, else python)
+#   -Python "<command>"              Python 3 executable name or full path (default: the py launcher if installed, else python)
 #   -Force                           build even if the Deceptious files are not the tested 1.4.3 versions
 param(
   [Parameter(Mandatory=$true)][string]$DbfArchive,
@@ -16,11 +16,14 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Resolve-Full([string]$p, [string]$what) {
-  $p = $p.Trim().TrimEnd('"').TrimEnd('\')
-  if (-not (Test-Path -LiteralPath $p)) { throw "$what not found: $p" }
+  $p = $p.Trim().TrimEnd('"')
+  if ($p.Length -gt 3) { $p = $p.TrimEnd('\') }   # keep "D:\" a drive root
+  if ($p -eq "" -or -not (Test-Path -LiteralPath $p)) { throw "$what not found: '$p'" }
   # .NET and Python don't understand ~, PowerShell drives or PowerShell's current folder
   return (Resolve-Path -LiteralPath $p).ProviderPath
 }
+
+if (-not [Environment]::Is64BitProcess) { throw "Run this from 64-bit PowerShell: the game's Oodle DLL is 64-bit." }
 
 $here = $PSScriptRoot
 $tools = Join-Path $here "tools"

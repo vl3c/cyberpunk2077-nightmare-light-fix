@@ -34,7 +34,7 @@ def read_vlq(b, p):
 def read_str_len(b, p):
     # node ref strings: packed length with bit7 of the first byte set for 1-byte (ASCII/UTF-8) text;
     # without it the text would be UTF-16, which these sectors never use
-    check(b[p] & 0x80, 'UTF-16 node ref string at offset %d is not supported' % p)
+    check(b[p] == 0 or b[p] & 0x80, 'UTF-16 node ref string at offset %d is not supported' % p)
     return read_vlq(b, p)
 
 def noderef_hash(s):

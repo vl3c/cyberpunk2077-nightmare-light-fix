@@ -74,8 +74,8 @@ def main():
             if ni == 0: break
             sz = struct.unpack_from('<I', raw, p + 4)[0]
             ch[c.names[ni]] = raw[p + 8]; p += 4 + sz
-        check(all(k in ch for k in ('Red', 'Green', 'Blue')), 'light color without explicit Red/Green/Blue')
-        return ch['Red'], ch['Green'], ch['Blue']
+        # cooked files leave out channels that are 0
+        return ch.get('Red', 0), ch.get('Green', 0), ch.get('Blue', 0)
     newdata = {}
     keep = []; dropped = []; scaled = []; fogged = []
     for r in range(len(buf) // 144):
